@@ -1,4 +1,5 @@
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 def ping_device(ip):
     result = subprocess.run(
@@ -6,21 +7,24 @@ def ping_device(ip):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
-    return result.returncode == 0
+    if result.returncode == 0:
+        return ip
+    return None
 
-# نطاق الشبكة تبعك (غيّر أول 3 أرقام حسب شبكتك لو تغيرت)
 network_prefix = "192.168.100."
+ip_list = [network_prefix + str(i) for i in range(1, 255)]
 
-print("جاري فحص الشبكة... هذا ممكن ياخذ دقيقة أو أكثر")
+print("جاري فحص الشبكة بسرعة أكبر...")
 print("-" * 40)
 
 active_devices = []
 
-for i in range(1, 255):
-    ip = network_prefix + str(i)
-    if ping_device(ip):
-        print(f"{ip} - جهاز نشط ✅")
-        active_devices.append(ip)
+with ThreadPoolExecutor(max_workers=50) as executor:
+    results = executor.map(ping_device, ip_list)
+    for ip in results:
+        if ip:
+            print(f"{ip} - جهاز نشط ✅")
+            active_devices.append(ip)
 
 print("-" * 40)
 print(f"عدد الأجهزة النشطة: {len(active_devices)}")
