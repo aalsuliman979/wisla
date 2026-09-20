@@ -37,3 +37,44 @@ def get_all_scans():
     rows = cursor.fetchall()
     connection.close()
     return rows
+
+def diagnose_network():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    # نجيب آخر فحص لكل جهاز (أحدث سجل لكل IP)
+    cursor.execute("""
+    SELECT ip_address, latency_ms
+    FROM scans
+    WHERE id IN (
+        SELECT MAX(id) FROM scans GROUP BY ip_address
+    )
+    """)
+    latest_scans = cursor.fetchall()
+    connection.close()
+
+    if not latest_scans:
+        return ["ما فيه بيانات كافية للتحليل بعد"]
+
+    # نحسب المتوسط (نتجاهل القيم الفارغة)
+    valid_latencies = [lat for ip, lat in latest_scans if lat is not None]
+    if not valid_latencies:
+        return ["ما فيه بيانات زمن استجابة صالحة"]
+
+    average_latency = sum(valid_latencies) / len(valid_latencies)
+
+    diagnosis = []
+    diagnosis.append(f"متوسط زمن الاستجابة على شبكتك: {average_latency:.1f}ms")
+
+    for ip, latency in latest_scans:
+        if latency is None:
+            continue
+        if latency > average_latency * 2:
+            diagnosis.append(f"🔴 جهاز {ip} بطيء جدًا ({latency}ms) — أكثر من ضعف متوسط شبكتك")
+        elif latency > average_latency * 1.5:
+            diagnosis.append(f"🟡 جهاز {ip} أبطأ من المعتاد ({latency}ms)")
+
+    if len(diagnosis) == 1:
+        diagnosis.append("✅ كل الأجهزة تعمل بأداء طبيعي، لا توجد مشاكل واضحة")
+
+    return diagnosis
