@@ -13,22 +13,27 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ip_address TEXT NOT NULL,
         latency_ms INTEGER,
+        packet_loss INTEGER,
+        jitter_ms INTEGER,
         scan_time TEXT NOT NULL
     )
     """)
     connection.commit()
     connection.close()
 
-def save_scan_result(ip_address, latency_ms):
-    connection = get_connection()
-    cursor = connection.cursor()
-    scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("""
-    INSERT INTO scans (ip_address, latency_ms, scan_time)
-    VALUES (?, ?, ?)
-    """, (ip_address, latency_ms, scan_time))
-    connection.commit()
-    connection.close()
+def save_scan_result(ip_address, latency_ms, packet_loss=0, jitter_ms=0):
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+        INSERT INTO scans (ip_address, latency_ms, packet_loss, jitter_ms, scan_time)
+        VALUES (?, ?, ?, ?, ?)
+        """, (ip_address, latency_ms, packet_loss, jitter_ms, scan_time))
+        connection.commit()
+        connection.close()
+    except sqlite3.Error as e:
+        print(f"خطأ بحفظ {ip_address}: {e}")
 
 def get_all_scans():
     connection = get_connection()
@@ -42,9 +47,8 @@ def diagnose_network():
     connection = get_connection()
     cursor = connection.cursor()
 
-    # نجيب آخر فحص لكل جهاز (أحدث سجل لكل IP)
     cursor.execute("""
-    SELECT ip_address, latency_ms
+    SELECT ip_address, latency_ms, packet_loss, jitter_ms
     FROM scans
     WHERE id IN (
         SELECT MAX(id) FROM scans GROUP BY ip_address
@@ -56,25 +60,36 @@ def diagnose_network():
     if not latest_scans:
         return ["ما فيه بيانات كافية للتحليل بعد"]
 
-    # نحسب المتوسط (نتجاهل القيم الفارغة)
-    valid_latencies = [lat for ip, lat in latest_scans if lat is not None]
-    if not valid_latencies:
-        return ["ما فيه بيانات زمن استجابة صالحة"]
+    valid = [(ip, lat, loss, jit) for ip, lat, loss, jit in latest_scans if lat is not None]
+    if not valid:
+        return ["ما فيه بيانات صالحة للتحليل"]
 
-    average_latency = sum(valid_latencies) / len(valid_latencies)
+    avg_latency = sum(v[1] for v in valid) / len(valid)
 
     diagnosis = []
-    diagnosis.append(f"متوسط زمن الاستجابة على شبكتك: {average_latency:.1f}ms")
+    diagnosis.append(f"متوسط زمن الاستجابة على شبكتك: {avg_latency:.1f}ms")
+    diagnosis.append(f"عدد الأجهزة المفحوصة: {len(valid)}")
 
-    for ip, latency in latest_scans:
-        if latency is None:
-            continue
-        if latency > average_latency * 2:
-            diagnosis.append(f"🔴 جهاز {ip} بطيء جدًا ({latency}ms) — أكثر من ضعف متوسط شبكتك")
-        elif latency > average_latency * 1.5:
-            diagnosis.append(f"🟡 جهاز {ip} أبطأ من المعتاد ({latency}ms)")
+    for ip, latency, loss, jitter in valid:
+        issues = []
 
-    if len(diagnosis) == 1:
+        if loss and loss >= 50:
+            issues.append(f"🔴 فقدان حزم خطير ({loss}%) — الاتصال شبه منقطع")
+        elif loss and loss >= 20:
+            issues.append(f"🟡 فقدان حزم ملحوظ ({loss}%)")
+
+        if latency > avg_latency * 2:
+            issues.append(f"🔴 بطء شديد ({latency}ms) — أكثر من ضعف المتوسط")
+        elif latency > avg_latency * 1.5:
+            issues.append(f"🟡 أبطأ من المعتاد ({latency}ms)")
+
+        if jitter and jitter >= 150:
+            issues.append(f"🟡 تذبذب عالي ({jitter}ms) — اتصال غير مستقر")
+
+        if issues:
+            diagnosis.append(f"جهاز {ip}: " + " | ".join(issues))
+
+    if len(diagnosis) == 2:
         diagnosis.append("✅ كل الأجهزة تعمل بأداء طبيعي، لا توجد مشاكل واضحة")
 
     return diagnosis

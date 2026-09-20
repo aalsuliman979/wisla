@@ -3,38 +3,44 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from db_helper import init_db, save_scan_result
 
-def ping_device(ip):
+def ping_device(ip, count=5):
     result = subprocess.run(
-        ["ping", "-n", "1", "-w", "300", ip],
+        ["ping", "-n", str(count), "-w", "300", ip],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True
     )
-    if result.returncode == 0:
-        match = re.search(r"time[=<](\d+)ms", result.stdout)
-        latency = int(match.group(1)) if match else None
-        return (ip, latency)
-    return None
+
+    # نستخرج كل أزمنة الاستجابة اللي نجحت
+    latencies = [int(x) for x in re.findall(r"time[=<](\d+)ms", result.stdout)]
+
+    # نستخرج نسبة الفقدان من ملخص Windows نفسه
+    loss_match = re.search(r"\((\d+)% loss\)", result.stdout)
+    packet_loss = int(loss_match.group(1)) if loss_match else 100
+
+    if not latencies:
+        return None
+
+    avg_latency = sum(latencies) / len(latencies)
+    jitter = max(latencies) - min(latencies)
+
+    return (ip, round(avg_latency), packet_loss, jitter)
 
 init_db()
 
 network_prefix = "192.168.100."
 ip_list = [network_prefix + str(i) for i in range(1, 255)]
 
-print("جاري فحص الشبكة وحفظ النتائج...")
-print("-" * 50)
+print("جاري فحص جودة الاتصال لكل جهاز (5 محاولات لكل جهاز)...")
+print("-" * 60)
 
-active_devices = []
-
-with ThreadPoolExecutor(max_workers=50) as executor:
+with ThreadPoolExecutor(max_workers=30) as executor:
     results = executor.map(ping_device, ip_list)
     for result in results:
         if result:
-            ip, latency = result
-            print(f"{ip} - زمن الاستجابة: {latency}ms")
-            save_scan_result(ip, latency)
-            active_devices.append((ip, latency))
+            ip, avg_latency, packet_loss, jitter = result
+            print(f"{ip} - متوسط: {avg_latency}ms | فقدان: {packet_loss}% | تذبذب: {jitter}ms")
+            save_scan_result(ip, avg_latency, packet_loss, jitter)
 
-print("-" * 50)
-print(f"عدد الأجهزة النشطة: {len(active_devices)}")
-print("تم حفظ النتائج في قاعدة البيانات ✅")
+print("-" * 60)
+print("تم الفحص والحفظ ✅")
