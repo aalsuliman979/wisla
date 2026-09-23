@@ -17,8 +17,8 @@ def dashboard():
         if ip not in latest:
             latest[ip] = (latency, loss, jitter, scan_time)
 
-    html = "<h1>🔗 وصلة - Wisla</h1>"
-    html += "<h2>التشخيص:</h2><ul>"
+    html = "<h1> وصلة - Wisla</h1>"
+    html += "<h2> التشخيص:</h2><ul>"
     for line in diagnosis:
         html += f"<li>{line}</li>"
     html += "</ul>"
