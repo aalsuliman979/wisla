@@ -2,11 +2,56 @@ from flask import Flask, jsonify
 from db_helper import init_db, diagnose_network, get_all_scans, save_scan_result
 import subprocess
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
 init_db()
+
+VENDOR_PREFIXES = {
+    "3C5AB4": "Samsung", "8C8590": "Samsung", "247189": "Samsung",
+    "A483E7": "Apple", "F0D1A9": "Apple", "3C0754": "Apple", "F4F951": "Apple",
+    "B827EB": "Raspberry Pi",
+    "001A11": "Google", "F4F5D8": "Google",
+    "00E04C": "Realtek", "50465D": "Amazon",
+    "FCA13E": "Huawei", "00259C": "Cisco"
+}
+
+def get_mac_address(ip):
+    try:
+        result = subprocess.run(
+            ["arp", "-a", ip],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True
+        )
+        match = re.search(r"([0-9a-f]{2}-){5}[0-9a-f]{2}", result.stdout, re.IGNORECASE)
+        if match:
+            return match.group(0).replace("-", "").upper()
+    except Exception:
+        pass
+    return None
+
+def get_hostname(ip):
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return None
+
+def identify_device(ip):
+    hostname = get_hostname(ip)
+    if hostname and hostname != ip:
+        return hostname
+
+    mac = get_mac_address(ip)
+    if mac:
+        prefix = mac[:6]
+        vendor = VENDOR_PREFIXES.get(prefix)
+        if vendor:
+            return f"جهاز {vendor}"
+
+    return "جهاز غير معروف"
 
 def ping_device(ip, count=5):
     result = subprocess.run(
@@ -40,10 +85,15 @@ def get_dashboard_data():
     all_scans = get_all_scans()
 
     latest = {}
-    for scan in all_scans:
-        scan_id, ip, latency, loss, jitter, scan_time = scan
+    for scan_id, ip, latency, loss, jitter, scan_time in all_scans:
         if ip not in latest:
-            latest[ip] = {"ip": ip, "latency": latency, "loss": loss, "jitter": jitter, "time": scan_time}
+            latest[ip] = {
+                "ip": ip,
+                "name": identify_device(ip),
+                "latency": latency,
+                "loss": loss,
+                "jitter": jitter
+            }
 
     return {"diagnosis": diagnosis, "devices": list(latest.values())}
 
@@ -288,7 +338,7 @@ def home():
             }
             html += '</div><div class="section"><h3>الأجهزة المكتشفة</h3>';
             data.devices.forEach(dev => {
-                html += `<div class="row"><span>${dev.ip}</span><span>${dev.latency}ms</span><span>فقدان ${dev.loss}%</span><span>تذبذب ${dev.jitter}ms</span></div>`;
+                html += `<div class="row"><span>${dev.name}</span><span>${dev.latency}ms</span></div>`;
             });
             html += '</div>';
             document.getElementById('scrollArea').innerHTML = html;
@@ -307,7 +357,6 @@ def home():
                 .then(data => renderData(data));
         }
 
-        // خلفية الشبكة المتحركة
         const canvas = document.getElementById('network-canvas');
         const ctx = canvas.getContext('2d');
         let width, height;
